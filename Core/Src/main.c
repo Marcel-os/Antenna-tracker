@@ -20,11 +20,13 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "tim.h"
 #include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "pid.h"
 
 /* USER CODE END Includes */
 
@@ -51,6 +53,14 @@ uint8_t MessageLength = 0; // Zawiera dlugosc wysylanej wiadomosci
 uint8_t ReceivedData[100]; // Tablica przechowujaca odebrane dane
 uint8_t ReceivedDataFlag = 0; // Flaga informujaca o odebraniu danych
 
+volatile uint16_t pulse_count_azimuth; // Licznik impulsow
+volatile uint16_t positions_azimuth; // Licznik przekreconych pozycji
+
+volatile uint16_t pulse_count_height; // Licznik impulsow
+volatile uint16_t positions_height; // Licznik przekreconych pozycji
+
+cpid_t pid_azimuth;
+cpid_t pid_height;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -63,6 +73,53 @@ int _write(int file, char *ptr, int len){
     return len;
 }
 
+void parse(){
+  	char header[1];
+  	int32_t PWM1, PWM2, DIR1, DIR2;
+
+  	sscanf(ReceivedData, "%s %d %d %d %d", &header, &PWM1, &PWM2, &DIR1, &DIR2);
+  	if( header[0] == 'S' && PWM1 >= 0 && PWM1 < 65535 && PWM2 >= 0 && PWM2 < 65535 && (DIR1 == 1 || DIR1 == 0) && (DIR2 == 1 || DIR2 == 0) )
+  	{
+  		send_json(PWM1, PWM2);
+  		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, PWM1 );
+  		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, PWM2 );
+
+  		if(DIR1 == 1){
+  			HAL_GPIO_WritePin(MOTOR11_GPIO_Port, MOTOR11_Pin, GPIO_PIN_SET);
+  			HAL_GPIO_WritePin(MOTOR12_GPIO_Port, MOTOR12_Pin, GPIO_PIN_RESET);
+  		}
+
+  		if(DIR1 == 0){
+  			HAL_GPIO_WritePin(MOTOR11_GPIO_Port, MOTOR11_Pin, GPIO_PIN_RESET);
+  			HAL_GPIO_WritePin(MOTOR12_GPIO_Port, MOTOR12_Pin, GPIO_PIN_SET);
+  		}
+
+  		if(DIR2 == 1){
+  			HAL_GPIO_WritePin(MOTOR21_GPIO_Port, MOTOR21_Pin, GPIO_PIN_SET);
+  			HAL_GPIO_WritePin(MOTOR22_GPIO_Port, MOTOR22_Pin, GPIO_PIN_RESET);
+  		}
+
+  		if(DIR2 == 0){
+  			HAL_GPIO_WritePin(MOTOR21_GPIO_Port, MOTOR21_Pin, GPIO_PIN_RESET);
+  			HAL_GPIO_WritePin(MOTOR22_GPIO_Port, MOTOR22_Pin, GPIO_PIN_SET);
+  		}
+
+  		if( PWM1 == 0 && PWM2 ==0 ){
+  			HAL_GPIO_WritePin(MOTOR11_GPIO_Port, MOTOR11_Pin, GPIO_PIN_RESET);
+  			HAL_GPIO_WritePin(MOTOR12_GPIO_Port, MOTOR12_Pin, GPIO_PIN_RESET);
+  			HAL_GPIO_WritePin(MOTOR21_GPIO_Port, MOTOR21_Pin, GPIO_PIN_RESET);
+  			HAL_GPIO_WritePin(MOTOR22_GPIO_Port, MOTOR22_Pin, GPIO_PIN_RESET);
+  		}
+  		send_json(PWM1, PWM2);
+
+//	  	sprintf(DataToSend, "%d %d %d %d \r\n", PWM1, PWM2, DIR1, DIR2);
+//	  	printf(DataToSend);
+  	}else printf("error - zle dane \r\n");
+}
+
+void send_json(int32_t Encoder1, int32_t Encoder2){
+	printf("{\"enkoder1\":%d,\"enkoder2\":%d}\r\n", Encoder1, Encoder2);
+}
 
 /* USER CODE END PFP */
 
@@ -99,31 +156,76 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_TIM1_Init();
+  MX_TIM2_Init();
+  MX_TIM3_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_2);
+
+  HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
+  HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+
+  pid_init(&pid_azimuth, 150.0f, 50.0f, 0.005f, 10, 1);
+  pid_azimuth.p_max = pid_scale(&pid_azimuth, 4095);
+  pid_azimuth.p_min = pid_scale(&pid_azimuth, -4095);
+  pid_azimuth.i_max = pid_scale(&pid_azimuth, 4095);
+  pid_azimuth.i_min = pid_scale(&pid_azimuth, -4095);
+  pid_azimuth.d_max = pid_scale(&pid_azimuth, 4095);
+  pid_azimuth.d_min = pid_scale(&pid_azimuth, -4095);
+  pid_azimuth.total_max = pid_scale(&pid_azimuth, 4095);
+  pid_azimuth.total_min = pid_scale(&pid_azimuth, 0);
+
+  pid_init(&pid_height, 150.0f, 50.0f, 0.005f, 10, 1);
+  pid_height.p_max = pid_scale(&pid_height, 4095);
+  pid_height.p_min = pid_scale(&pid_height, -4095);
+  pid_height.i_max = pid_scale(&pid_height, 4095);
+  pid_height.i_min = pid_scale(&pid_height, -4095);
+  pid_height.d_max = pid_scale(&pid_height, 4095);
+  pid_height.d_min = pid_scale(&pid_height, -4095);
+  pid_height.total_max = pid_scale(&pid_height, 4095);
+  pid_height.total_min = pid_scale(&pid_height, 0);
+
+
+
+
+  //pwm_control = pid_calc(&pid, adc_value, pwm_value);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+      HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+
+		HAL_GPIO_WritePin(MOTOR11_GPIO_Port, MOTOR11_Pin, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(MOTOR12_GPIO_Port, MOTOR12_Pin, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(MOTOR21_GPIO_Port, MOTOR21_Pin, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(MOTOR22_GPIO_Port, MOTOR22_Pin, GPIO_PIN_RESET);
   while (1)
   {
+
+		pulse_count_azimuth = TIM2->CNT; // przepisanie wartosci z rejestru timera
+		positions_azimuth = pulse_count_azimuth/4;
+
+		pulse_count_height = TIM2->CNT; // przepisanie wartosci z rejestru timera
+		positions_height = pulse_count_height/4;
+
 	  if(ReceivedDataFlag == 1){
 	  	ReceivedDataFlag = 0;
-
-	  	MessageLength = sprintf(DataToSend, "%s \r\n", ReceivedData);
-	  	//printf("kupa", 10.7, 20.7);
-//	  	subString = strtok(ReceivedData,"\""); // find the first double quote
-//	  	subString = strtok(NULL,"\"");   // find the second double quote
-	  	//CDC_Transmit_FS(DataToSend, MessageLength);
-	  	int num = atoi(ReceivedData);
-	  	printf(num);
+	  	parse();
 	  }
 
-//	  scanf ("%d",ReceivedData);
-//	  printf("%d", ReceivedData);
-	  //printf("{\"enkoder1\":%f,\"enkoder2\":%f}\r\n", 10.7, 20.7);
-	  //HAL_Delay(100);
+//	  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 65000);
+//	  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 65000);
+//	  HAL_Delay(1000);
+//	  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
+//	  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+//	  HAL_Delay(1000);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
