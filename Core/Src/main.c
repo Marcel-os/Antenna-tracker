@@ -27,6 +27,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "pid.h"
+#include <math.h>
 
 /* USER CODE END Includes */
 
@@ -120,6 +121,43 @@ void parse(){
 void send_json(int32_t Encoder1, int32_t Encoder2){
 	printf("{\"enkoder1\":%d,\"enkoder2\":%d}\r\n", Encoder1, Encoder2);
 }
+
+void send_json_ada(double azimuth, double altitude, double distance){
+	printf("{\"azimuth\":%f,\"altitude\":%f,\"distance\":%f}\r\n", azimuth, altitude, distance);
+}
+
+void calc_azimuth(double Latitude1, double Longitude1, double Height1, double Latitude2, double Longitude2, double Height2, double *azimuth, double *distance, double *altitude){ //Latitude = φ Longitude = λ
+	double delta_Latitude = Latitude2 - Latitude1;
+	double delta_Longitude = Longitude2 - Longitude1;
+	double delta_Height = Height2 - Height1;
+
+	//θ = atan2 [(sin Δλ * cos φ₂), (cos φ�? * sin φ₂ �?� sin φ�? * cos φ₂ *  cos Δλ)]
+	*azimuth = atan2( ( sin(delta_Longitude) * cos(Latitude2) ) , ( (cos(Latitude1) * sin(Latitude2)) - (sin(Latitude1) * cos(Latitude2) * cos(delta_Longitude)) ) ) * (180/ M_PI );
+	//Haversine formula:
+	//a = sin²(Δφ/2) + cos φ�? * cos φ₂ * sin²(Δλ/2)
+	double a = pow( sin(delta_Latitude/2), 2.0 ) + cos(Latitude1) * cos(Latitude2) * pow(sin(delta_Longitude/2), 2.0);
+	//c = 2 * atan2 [�?�a, �?�(1�?�a)]
+	double c = 2.0 * atan2( sqrt(a), sqrt(1.0-a));
+	//d = R * c, R = 6371 km - radius of the Earth
+	double sphere_distance = 6371.0 * c; // in km
+
+	*distance = sqrt( pow(sphere_distance, 2.0) + pow(delta_Height, 2.0));// in km
+	*altitude = acos(sphere_distance/ *distance) * (180/M_PI);
+}
+
+void parse_loc(){
+  	char header[1];
+  	double Latitude1, Longitude1, Height1, Latitude2, Longitude2, Height2, azimuth, distance, altitude;
+
+  	sscanf(ReceivedData, "%s %lf %lf %lf %lf %lf %lf", &header, &Latitude1, &Longitude1, &Height1, &Latitude2, &Longitude2, &Height2);
+  	if( header[0] == 'G' )
+  	{
+  		//calc_azimuth( Latitude1,  Longitude1,  Height1,  Latitude2,  Longitude2,  Height2,  &azimuth,  &distance,  &altitude);
+  		send_json_ada( azimuth, altitude, distance);
+
+  	}else printf("error - zle dane \r\n");
+}
+
 
 /* USER CODE END PFP */
 
@@ -217,7 +255,8 @@ int main(void)
 
 	  if(ReceivedDataFlag == 1){
 	  	ReceivedDataFlag = 0;
-	  	parse();
+	  	//parse();
+	  	parse_loc();
 	  }
 
 //	  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 65000);
